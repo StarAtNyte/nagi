@@ -79,13 +79,19 @@ jobs:
           if (-not $asset) { throw "Could not find mpv-dev-x86_64 asset in release" }
           Write-Host "Downloading: $($asset.name)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv-dev.7z
-          7z e mpv-dev.7z "*.dll" -r -y
-          Write-Host "DLLs found:"; Get-ChildItem -Name "*.dll"
+          # Extract DLLs and MSVC import libs
+          7z e mpv-dev.7z "*.dll" "*.lib" -r -y
+          Write-Host "Extracted files:"; Get-ChildItem -Name "*.dll","*.lib"
+          # Copy DLL
           $dll = Get-ChildItem -Name "libmpv*.dll" | Select-Object -First 1
           if (-not $dll) { $dll = Get-ChildItem -Name "*.dll" | Select-Object -First 1 }
           if (-not $dll) { throw "No DLL found in mpv-dev archive" }
-          Write-Host "Using: $dll"
-          Copy-Item $dll wix\libmpv.dll
+          Write-Host "DLL: $dll"; Copy-Item $dll wix\libmpv.dll
+          # Copy import lib (needed by MSVC linker)
+          $lib = Get-ChildItem -Name "mpv.lib","libmpv.lib" | Select-Object -First 1
+          if (-not $lib) { $lib = Get-ChildItem -Name "*.lib" | Select-Object -First 1 }
+          if (-not $lib) { throw "No .lib found in mpv-dev archive" }
+          Write-Host "Lib: $lib"; Copy-Item $lib wix\mpv.lib
 
       - name: Build release binary
         run: cargo build --release --target x86_64-pc-windows-msvc
