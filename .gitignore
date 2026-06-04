@@ -1,3 +1,25 @@
+# Build output
 /target/
+
+# Local libmpv symlink / bundled DLL
 libmpv.so
 wix/libmpv.dll
+
+# Packaging artifacts
+*.deb
+*.msi
+*.rpm
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Internal planning / specs (not for public consumption)
+docs/superpowers/

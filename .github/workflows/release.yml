@@ -70,18 +70,22 @@ jobs:
       - name: Download libmpv.dll
         shell: pwsh
         run: |
-          $release = Invoke-RestMethod "https://api.github.com/repos/mpv-player/mpv/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -like "*x86_64*" -and $_.name -like "*.7z" } | Select-Object -First 1
-          if (-not $asset) {
-            # Fallback: use shinchiro's mpv builds
-            $release = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
-            $asset = $release.assets | Where-Object { $_.name -like "*x86_64*" -and $_.name -notlike "*debug*" } | Select-Object -First 1
-          }
+          # Fetch latest shinchiro mpv Windows build (most reliable source)
+          $release = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
+          $asset = $release.assets |
+            Where-Object { $_.name -like "*x86_64*" -and $_.name -like "*.7z" -and $_.name -notlike "*debug*" } |
+            Select-Object -First 1
+          if (-not $asset) { throw "Could not find x86_64 mpv release asset" }
+          Write-Host "Downloading: $($asset.name)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z
-          7z e mpv.7z "libmpv*.dll" -r -y
+          # Extract all DLLs (dll may be libmpv-2.dll, mpv-2.dll, etc.)
+          7z e mpv.7z "*.dll" -r -y
+          # Find the mpv shared library — prefer libmpv-2.dll, fallback mpv-2.dll
           $dll = Get-ChildItem -Name "libmpv*.dll" | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem -Name "mpv*.dll" | Select-Object -First 1 }
+          if (-not $dll) { throw "libmpv DLL not found in archive" }
+          Write-Host "Found: $dll"
           Copy-Item $dll wix\libmpv.dll
-          echo "Found: $dll"
 
       - name: Build release binary
         run: cargo build --release --target x86_64-pc-windows-msvc
@@ -90,10 +94,10 @@ jobs:
         run: dotnet tool install --global wix
 
       - name: Build .msi
+        shell: pwsh
         run: |
-          Copy-Item target\x86_64-pc-windows-msvc\release\nagi.exe target\release\nagi.exe -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path target\release
-          Copy-Item target\x86_64-pc-windows-msvc\release\nagi.exe target\release\nagi.exe
+          New-Item -ItemType Directory -Force -Path target\release | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\nagi.exe target\release\nagi.exe -Force
           wix build wix\main.wxs -o target\nagi-0.1.0-x64.msi
 
       - name: Upload .msi artifact
