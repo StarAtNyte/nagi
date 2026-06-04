@@ -1,0 +1,13 @@
+[Unit]
+Description=Nagi video wallpaper daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nagi --background
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
