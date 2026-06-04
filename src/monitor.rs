@@ -88,61 +88,54 @@ pub fn detect_monitors() -> Vec<MonitorInfo> {
 #[cfg(target_os = "windows")]
 pub fn detect_monitors() -> Vec<MonitorInfo> {
     use windows::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW, HDC, HMONITOR,
+        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
     };
     use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
-    use std::sync::Mutex;
 
-    static MONITORS: Mutex<Vec<MonitorInfo>> = Mutex::new(Vec::new());
-
-    {
-        if let Ok(mut m) = MONITORS.lock() {
-            m.clear();
-        }
-    }
-
-    extern "system" fn enum_proc(
+    unsafe extern "system" fn enum_proc(
         hmon: HMONITOR,
         _hdc: HDC,
         _rect: *mut RECT,
-        _lparam: LPARAM,
+        lparam: LPARAM,
     ) -> BOOL {
-        unsafe {
-            let mut info: MONITORINFOEXW = std::mem::zeroed();
-            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-            if GetMonitorInfoW(hmon, &mut info.monitorInfo as *mut _ as *mut _).as_bool() {
-                let rc = info.monitorInfo.rcMonitor;
-                let name = String::from_utf16_lossy(&info.szDevice)
-                    .trim_matches(char::from(0))
-                    .to_string();
-                let is_primary = info.monitorInfo.dwFlags & 1 != 0;
-                if let Ok(mut m) = MONITORS.lock() {
-                    m.push(MonitorInfo {
-                        name,
-                        x: rc.left,
-                        y: rc.top,
-                        width: (rc.right - rc.left) as u32,
-                        height: (rc.bottom - rc.top) as u32,
-                        is_primary,
-                    });
-                }
-            }
+        let monitors = &mut *(lparam.0 as *mut Vec<MonitorInfo>);
+        let mut info: MONITORINFOEXW = std::mem::zeroed();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(hmon, &mut info.monitorInfo as *mut _).as_bool() {
+            let rc = info.monitorInfo.rcMonitor;
+            let name = String::from_utf16_lossy(&info.szDevice)
+                .trim_matches('\0')
+                .to_string();
+            let is_primary = info.monitorInfo.dwFlags & 1 != 0;
+            monitors.push(MonitorInfo {
+                name,
+                x: rc.left,
+                y: rc.top,
+                width: (rc.right - rc.left) as u32,
+                height: (rc.bottom - rc.top) as u32,
+                is_primary,
+            });
         }
         BOOL(1)
     }
 
+    let mut monitors: Vec<MonitorInfo> = Vec::new();
     unsafe {
-        EnumDisplayMonitors(HDC::default(), None, Some(enum_proc), LPARAM(0));
+        let _ = EnumDisplayMonitors(
+            HDC::default(),
+            None,
+            Some(enum_proc),
+            LPARAM(&mut monitors as *mut _ as isize),
+        );
     }
 
-    let mut result = MONITORS.lock().map(|m| m.clone()).unwrap_or_default();
-    if result.is_empty() {
-        result.push(MonitorInfo {
+    if monitors.is_empty() {
+        monitors.push(MonitorInfo {
             name: "Default".into(),
             x: 0, y: 0, width: 1920, height: 1080, is_primary: true,
         });
     }
-    result
+    monitors
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]

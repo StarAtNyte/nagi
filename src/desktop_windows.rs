@@ -1,22 +1,19 @@
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, BLACK_BRUSH};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, EnumWindows, FindWindowExW, FindWindowW,
-    GetWindowLongW, RegisterClassExW, SendMessageTimeoutW, SetParent, ShowWindow,
-    GWL_STYLE, SHOW_WINDOW_CMD, SW_SHOW, SMTO_NORMAL, WNDCLASSEXW, WS_CHILD,
-    WS_VISIBLE, CS_HREDRAW, CS_VREDRAW,
+    RegisterClassExW, SendMessageTimeoutW, ShowWindow,
+    CS_HREDRAW, CS_VREDRAW, SMTO_NORMAL, SW_SHOW, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
 };
-use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::core::PCWSTR;
-use std::sync::atomic::{AtomicIsize, Ordering};
 
 static WORKER_W: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
+    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
 ) -> LRESULT {
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
@@ -27,46 +24,36 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 fn find_worker_w() -> Option<HWND> {
     unsafe {
-        let progman = FindWindowW(
-            PCWSTR(to_wide("Progman").as_ptr()),
-            PCWSTR::null(),
-        );
-        if progman.0 == 0 {
+        let progman_cls = to_wide("Progman");
+        let progman = FindWindowW(PCWSTR(progman_cls.as_ptr()), PCWSTR::null())
+            .unwrap_or_default();
+        if progman.0.is_null() {
             return None;
         }
 
-        // Spawn WorkerW behind desktop icons
-        SendMessageTimeoutW(
-            progman,
-            0x052C,
-            WPARAM(0xD),
-            LPARAM(0x1),
-            SMTO_NORMAL,
-            1000,
-            None,
+        let _ = SendMessageTimeoutW(
+            progman, 0x052C, WPARAM(0xD), LPARAM(0x1), SMTO_NORMAL, 1000, None,
         );
 
         WORKER_W.store(0, Ordering::SeqCst);
 
-        extern "system" fn enum_proc(hwnd: HWND, _lparam: LPARAM) -> BOOL {
-            unsafe {
-                let shell = FindWindowExW(hwnd, HWND::default(),
-                    PCWSTR(to_wide("SHELLDLL_DefView").as_ptr()),
-                    PCWSTR::null());
-                if shell.0 != 0 {
-                    let worker = FindWindowExW(HWND::default(), hwnd,
-                        PCWSTR(to_wide("WorkerW").as_ptr()),
-                        PCWSTR::null());
-                    WORKER_W.store(worker.0, Ordering::SeqCst);
-                }
+        unsafe extern "system" fn enum_proc(hwnd: HWND, _: LPARAM) -> BOOL {
+            let shell_cls = to_wide("SHELLDLL_DefView");
+            let worker_cls = to_wide("WorkerW");
+            let shell = FindWindowExW(hwnd, HWND::default(), PCWSTR(shell_cls.as_ptr()), PCWSTR::null())
+                .unwrap_or_default();
+            if !shell.0.is_null() {
+                let worker = FindWindowExW(HWND::default(), hwnd, PCWSTR(worker_cls.as_ptr()), PCWSTR::null())
+                    .unwrap_or_default();
+                WORKER_W.store(worker.0 as isize, Ordering::SeqCst);
             }
             BOOL(1)
         }
 
-        EnumWindows(Some(enum_proc), LPARAM(0)).ok();
+        let _ = EnumWindows(Some(enum_proc), LPARAM(0));
 
         let raw = WORKER_W.load(Ordering::SeqCst);
-        if raw != 0 { Some(HWND(raw)) } else { None }
+        if raw != 0 { Some(HWND(raw as *mut c_void)) } else { None }
     }
 }
 
@@ -88,19 +75,15 @@ impl DesktopHandle {
         let hinstance = unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() };
 
         unsafe {
+            let brush = HBRUSH(GetStockObject(BLACK_BRUSH).0);
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(wnd_proc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
                 hInstance: hinstance.into(),
-                hIcon: Default::default(),
-                hCursor: Default::default(),
-                hbrBackground: GetStockObject(BLACK_BRUSH).into(),
-                lpszMenuName: PCWSTR::null(),
+                hbrBackground: brush,
                 lpszClassName: PCWSTR(class_name.as_ptr()),
-                hIconSm: Default::default(),
+                ..Default::default()
             };
             RegisterClassExW(&wc);
         }
@@ -108,7 +91,7 @@ impl DesktopHandle {
         let mut windows = Vec::new();
 
         for m in monitors {
-            let hwnd = unsafe {
+            let result = unsafe {
                 CreateWindowExW(
                     Default::default(),
                     PCWSTR(class_name.as_ptr()),
@@ -123,14 +106,14 @@ impl DesktopHandle {
                 )
             };
 
-            if hwnd.0 == 0 {
-                log::error!("Failed to create wallpaper window for {}", m.name);
-                continue;
+            match result {
+                Ok(hwnd) if !hwnd.0.is_null() => {
+                    unsafe { ShowWindow(hwnd, SW_SHOW); }
+                    log::info!("Wallpaper window {} {}x{} @{},{}", m.name, m.width, m.height, m.x, m.y);
+                    windows.push((m.name.clone(), hwnd));
+                }
+                _ => log::error!("Failed to create wallpaper window for {}", m.name),
             }
-
-            unsafe { ShowWindow(hwnd, SHOW_WINDOW_CMD(SW_SHOW.0)); }
-            log::info!("Wallpaper window {} {}x{} @{},{} => HWND={:?}", m.name, m.width, m.height, m.x, m.y, hwnd);
-            windows.push((m.name.clone(), hwnd));
         }
 
         Self { windows }
