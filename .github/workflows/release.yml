@@ -70,28 +70,54 @@ jobs:
       - name: Download libmpv.dll
         shell: pwsh
         run: |
-          # Fetch latest shinchiro mpv Windows build (most reliable source)
           $release = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
-          # shinchiro dev package contains libmpv.dll (player package is static)
           $asset = $release.assets |
             Where-Object { $_.name -like "mpv-dev-x86_64*" -and $_.name -like "*.7z" } |
             Select-Object -First 1
           if (-not $asset) { throw "Could not find mpv-dev-x86_64 asset in release" }
           Write-Host "Downloading: $($asset.name)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv-dev.7z
-          # Extract DLLs and MSVC import libs
-          7z e mpv-dev.7z "*.dll" "*.lib" -r -y
-          Write-Host "Extracted files:"; Get-ChildItem -Name "*.dll","*.lib"
-          # Copy DLL
+          # List archive contents for debugging
+          7z l mpv-dev.7z | Select-String "\.(dll|lib|a)$"
+          # Extract only DLLs (shinchiro dev has no MSVC .lib — we generate it below)
+          7z e mpv-dev.7z "*.dll" -r -y
           $dll = Get-ChildItem -Name "libmpv*.dll" | Select-Object -First 1
           if (-not $dll) { $dll = Get-ChildItem -Name "*.dll" | Select-Object -First 1 }
           if (-not $dll) { throw "No DLL found in mpv-dev archive" }
-          Write-Host "DLL: $dll"; Copy-Item $dll wix\libmpv.dll
-          # Copy import lib (needed by MSVC linker)
-          $lib = Get-ChildItem -Name "mpv.lib","libmpv.lib" | Select-Object -First 1
-          if (-not $lib) { $lib = Get-ChildItem -Name "*.lib" | Select-Object -First 1 }
-          if (-not $lib) { throw "No .lib found in mpv-dev archive" }
-          Write-Host "Lib: $lib"; Copy-Item $lib wix\mpv.lib
+          Write-Host "DLL: $dll"
+          New-Item -ItemType Directory -Force -Path wix | Out-Null
+          Copy-Item $dll wix\libmpv.dll
+
+      - name: Generate mpv.lib from DLL
+        shell: pwsh
+        run: |
+          # Locate MSVC dumpbin + lib via vswhere
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsRoot = & $vswhere -latest -property installationPath
+          $msvcVer = Get-ChildItem "$vsRoot\VC\Tools\MSVC" | Sort-Object Name -Descending | Select-Object -First 1
+          $binDir = "$($msvcVer.FullName)\bin\Hostx64\x64"
+          $dumpbin = "$binDir\dumpbin.exe"
+          $libExe  = "$binDir\lib.exe"
+          Write-Host "dumpbin: $dumpbin"
+          Write-Host "lib.exe: $libExe"
+
+          # Parse exports from the DLL
+          $raw = & $dumpbin /EXPORTS wix\libmpv.dll
+          $names = $raw | Select-String '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value } |
+            Where-Object { $_ -ne "" -and $_ -notmatch '^\d' }
+          Write-Host "Exports found: $($names.Count)"
+          if ($names.Count -eq 0) { throw "No exports parsed from DLL" }
+
+          # Write .def file
+          "LIBRARY libmpv-2" | Out-File -Encoding ASCII mpv.def
+          "EXPORTS"          | Out-File -Append -Encoding ASCII mpv.def
+          $names             | Out-File -Append -Encoding ASCII mpv.def
+
+          # Generate MSVC import library
+          & $libExe /DEF:mpv.def /OUT:wix\mpv.lib /MACHINE:X64 /NOLOGO
+          if ($LASTEXITCODE -ne 0) { throw "lib.exe failed with exit code $LASTEXITCODE" }
+          Write-Host "Generated wix\mpv.lib ($(((Get-Item wix\mpv.lib).Length / 1KB).ToString('F1')) KB)"
 
       - name: Build release binary
         run: cargo build --release --target x86_64-pc-windows-msvc
