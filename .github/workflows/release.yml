@@ -73,7 +73,7 @@ jobs:
           # Fetch latest shinchiro mpv Windows build (most reliable source)
           $release = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
           $asset = $release.assets |
-            Where-Object { $_.name -like "*x86_64*" -and $_.name -like "*.7z" -and $_.name -notlike "*debug*" } |
+            Where-Object { $_.name -like "mpv-x86_64*" -and $_.name -like "*.7z" -and $_.name -notlike "*debug*" } |
             Select-Object -First 1
           if (-not $asset) { throw "Could not find x86_64 mpv release asset" }
           Write-Host "Downloading: $($asset.name)"
