@@ -72,19 +72,19 @@ jobs:
         run: |
           # Fetch latest shinchiro mpv Windows build (most reliable source)
           $release = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
+          # shinchiro dev package contains libmpv.dll (player package is static)
           $asset = $release.assets |
-            Where-Object { $_.name -like "mpv-x86_64*" -and $_.name -like "*.7z" -and $_.name -notlike "*debug*" } |
+            Where-Object { $_.name -like "mpv-dev-x86_64*" -and $_.name -like "*.7z" } |
             Select-Object -First 1
-          if (-not $asset) { throw "Could not find x86_64 mpv release asset" }
+          if (-not $asset) { throw "Could not find mpv-dev-x86_64 asset in release" }
           Write-Host "Downloading: $($asset.name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z
-          # Extract all DLLs (dll may be libmpv-2.dll, mpv-2.dll, etc.)
-          7z e mpv.7z "*.dll" -r -y
-          # Find the mpv shared library — prefer libmpv-2.dll, fallback mpv-2.dll
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv-dev.7z
+          7z e mpv-dev.7z "*.dll" -r -y
+          Write-Host "DLLs found:"; Get-ChildItem -Name "*.dll"
           $dll = Get-ChildItem -Name "libmpv*.dll" | Select-Object -First 1
-          if (-not $dll) { $dll = Get-ChildItem -Name "mpv*.dll" | Select-Object -First 1 }
-          if (-not $dll) { throw "libmpv DLL not found in archive" }
-          Write-Host "Found: $dll"
+          if (-not $dll) { $dll = Get-ChildItem -Name "*.dll" | Select-Object -First 1 }
+          if (-not $dll) { throw "No DLL found in mpv-dev archive" }
+          Write-Host "Using: $dll"
           Copy-Item $dll wix\libmpv.dll
 
       - name: Build release binary
