@@ -40,6 +40,12 @@ impl std::fmt::Display for Mode {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self::default_config(&[])
+    }
+}
+
 impl Config {
     pub fn default_config(monitors: &[MonitorInfo]) -> Self {
         let mut data_source = HashMap::new();
