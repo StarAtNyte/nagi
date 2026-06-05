@@ -155,88 +155,88 @@ fn main() {
         });
     }
 
-    // ── GUI ──────────────────────────────────────────────────────
-    #[cfg(feature = "gui")]
-    if !args.background {
-        let cfg_gui = config.clone();
+    // ── System tray (background thread) ──────────────────────────
+    #[cfg(all(feature = "tray", feature = "player-mpv"))]
+    {
+        let tray_handle = tray::TrayHandle::new();
+        let pm = player_mgr.clone();
+        #[cfg(target_os = "linux")]
+        let orig_wp = original_wallpaper.clone();
+        let cfg_tray = config.clone();
         thread::spawn(move || {
-            let opts = eframe::NativeOptions {
-                viewport: egui::ViewportBuilder::default().with_inner_size([400.0, 600.0]),
-                ..Default::default()
-            };
-            let _ = eframe::run_native("Nagi", opts, Box::new(|_cc| Box::new(gui::NagiGui::new(cfg_gui))));
-        });
-    }
-
-    // ── System tray ──────────────────────────────────────────────
-    #[cfg(feature = "tray")]
-    let tray_handle = tray::TrayHandle::new();
-
-    log::info!("Nagi running. Ctrl+C to quit.");
-
-    loop {
-        // ── Tray event loop ──────────────────────────────────────
-        #[cfg(all(feature = "tray", feature = "player-mpv"))]
-        if let Some(ref tray) = tray_handle {
-            if let Some(action) = tray.poll_action() {
-                match action {
-                    tray::TrayAction::ToggleMute => {
-                        if let Ok(mut pm) = player_mgr.lock() {
-                            let mute = !pm.config.is_mute;
-                            pm.config.is_mute = mute;
-                            pm.set_mute_all(mute);
-                            pm.config.save();
-                        }
-                    }
-                    tray::TrayAction::TogglePlayPause => {
-                        if let Ok(mut pm) = player_mgr.lock() {
-                            let playing = pm.players.values().any(|p| p.is_playing);
-                            if playing { pm.pause_playback(); } else { pm.start_playback(); }
-                        }
-                    }
-                    tray::TrayAction::Reload => {
-                        if let Ok(mut pm) = player_mgr.lock() {
-                            let src = pm.config.data_source.get("Default").cloned().unwrap_or_default();
-                            if !src.is_empty() {
-                                pm.load_source(&src);
+            loop {
+                if let Some(ref tray) = tray_handle {
+                    if let Some(action) = tray.poll_action() {
+                        match action {
+                            tray::TrayAction::ToggleMute => {
+                                if let Ok(mut p) = pm.lock() {
+                                    let mute = !p.config.is_mute;
+                                    p.config.is_mute = mute;
+                                    p.set_mute_all(mute);
+                                    p.config.save();
+                                }
                             }
-                        }
-                    }
-                    tray::TrayAction::Lucky => {
-                        use rand::seq::SliceRandom;
-                        let dir = config::video_dir();
-                        let videos: Vec<_> = std::fs::read_dir(&dir)
-                            .into_iter()
-                            .flatten()
-                            .flatten()
-                            .filter(|e| e.path().is_file() && e.path().extension()
-                                .map(|x| ["mp4","webm","mkv","avi","mov","gif"].contains(&x.to_string_lossy().to_lowercase().as_str()))
-                                .unwrap_or(false))
-                            .map(|e| e.path().to_string_lossy().to_string())
-                            .collect();
-                        if let Some(v) = videos.choose(&mut rand::thread_rng()) {
-                            if let Ok(mut pm) = player_mgr.lock() {
-                                pm.load_source(v);
+                            tray::TrayAction::TogglePlayPause => {
+                                if let Ok(mut p) = pm.lock() {
+                                    let playing = p.players.values().any(|p| p.is_playing);
+                                    if playing { p.pause_playback(); } else { p.start_playback(); }
+                                }
                             }
-                        }
-                    }
-                    tray::TrayAction::Quit | tray::TrayAction::ShowGui => {
-                        if matches!(action, tray::TrayAction::Quit) {
-                            log::info!("Quit requested via tray");
-                            #[cfg(target_os = "linux")]
-                            if config.is_static_wallpaper {
-                                desktop_linux::restore_original_wallpaper(
-                                    &original_wallpaper.as_ref().map(|w| w.0.clone()),
-                                    &original_wallpaper.as_ref().map(|w| w.1.clone()),
-                                );
+                            tray::TrayAction::Reload => {
+                                if let Ok(mut p) = pm.lock() {
+                                    let src = p.config.data_source.get("Default").cloned().unwrap_or_default();
+                                    if !src.is_empty() { p.load_source(&src); }
+                                }
                             }
-                            std::process::exit(0);
+                            tray::TrayAction::Lucky => {
+                                use rand::seq::SliceRandom;
+                                let dir = config::video_dir();
+                                let videos: Vec<_> = std::fs::read_dir(&dir)
+                                    .into_iter().flatten().flatten()
+                                    .filter(|e| e.path().is_file() && e.path().extension()
+                                        .map(|x| ["mp4","webm","mkv","avi","mov","gif"].contains(&x.to_string_lossy().to_lowercase().as_str()))
+                                        .unwrap_or(false))
+                                    .map(|e| e.path().to_string_lossy().to_string())
+                                    .collect();
+                                if let Some(v) = videos.choose(&mut rand::thread_rng()) {
+                                    if let Ok(mut p) = pm.lock() { p.load_source(v); }
+                                }
+                            }
+                            tray::TrayAction::Quit => {
+                                log::info!("Quit via tray");
+                                #[cfg(target_os = "linux")]
+                                if cfg_tray.is_static_wallpaper {
+                                    desktop_linux::restore_original_wallpaper(
+                                        &orig_wp.as_ref().map(|w| w.0.clone()),
+                                        &orig_wp.as_ref().map(|w| w.1.clone()),
+                                    );
+                                }
+                                std::process::exit(0);
+                            }
+                            tray::TrayAction::ShowGui => {}
                         }
                     }
                 }
+                thread::sleep(Duration::from_millis(100));
             }
-        }
+        });
+    }
 
-        thread::sleep(Duration::from_millis(100));
+    log::info!("Nagi running. Ctrl+C to quit.");
+
+    // ── GUI on main thread (winit requires it) ───────────────────
+    #[cfg(feature = "gui")]
+    if !args.background {
+        let opts = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([400.0, 600.0]),
+            ..Default::default()
+        };
+        let _ = eframe::run_native("Nagi", opts, Box::new(|_cc| Box::new(gui::NagiGui::new(config))));
+        return;
+    }
+
+    // ── Background mode: park main thread ────────────────────────
+    loop {
+        thread::sleep(Duration::from_secs(1));
     }
 }
